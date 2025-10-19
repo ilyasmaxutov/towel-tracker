@@ -1,0 +1,29 @@
+name = "towel-tracker"
+main = "src/worker.mjs"
+compatibility_date = "2025-10-19"
+
+
+# Если используешь workers.dev — роуты не нужны. Для своего домена добавь [routes].
+# [routes]
+# routes = [
+# { pattern = "towel.example.com/*", zone_name = "example.com" }
+# ]
+
+
+[triggers]
+# Ежечасный крон — бот сам решит, кому сейчас пора напоминать
+crons = ["0 * * * *"]
+
+
+[observability]
+enabled = true
+
+
+# Переменные среды/секреты ЧЕРЕЗ `wrangler secret put` (см. инструкции)
+# TELEGRAM_TOKEN
+# TELEGRAM_WEBHOOK_SECRET
+# GOOGLE_CLIENT_EMAIL
+# GOOGLE_PRIVATE_KEY
+# SPREADSHEET_ID
+# DEFAULT_TZ (напр. Europe/Moscow)
+# DEFAULT_NOTIFY_HOUR (напр. 10)
