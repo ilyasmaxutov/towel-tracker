@@ -1,4 +1,3 @@
-/*
 // ====== Утилиты ======
 function b64url(input) {
 const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : new TextEncoder().encode(String(input));
