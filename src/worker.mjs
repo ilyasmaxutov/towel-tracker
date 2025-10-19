@@ -145,7 +145,6 @@ async function onMessage(msg, env) {
     ];
     await tgSend(env, chatId,
       "Привет! Я слежу за свежестью слотов полотенец.\n\n"+
-      "— Слот = личное/функциональное место (без QR).\n"+
       "— Создай слот: <code>/add Название | Дни</code>\n"+
       (link ? "— Открой панель по кнопке ниже (маг-ссылка действует 15 минут)." : "— Админ: установите WORKER_URL, чтобы появилась кнопка входа."),
       buttons
@@ -156,7 +155,7 @@ async function onMessage(msg, env) {
   if (text.startsWith("/add")) {
     const m = text.match(/^\/add\s+(.+?)\s*\|\s*(\d{1,3})$/);
     if (!m) {
-      await tgSend(env, chatId, "Формат:\n<code>/add Ванная — банное | 3</code>");
+      await tgSend(env, chatId, "Формат:\n<code>/add Для рук | 3</code>");
       return;
     }
     const name = m[1].trim();
@@ -191,15 +190,15 @@ async function onCallback(cb, env) {
   const data = cb.data || "";
 
   if (data === "ui:add") {
-    await tgSend(env, chatId, "Создай слот командой:\n<code>/add Название | Дни</code>\nНапример: <code>/add Ванная — банное | 3</code>");
+    await tgSend(env, chatId, "Создай слот командой:\n<code>/add Название | Дни</code>\nНапример: <code>/add Для рук | 3</code>");
     return tgAnswer(env, cb.id, "Жду /add");
   }
   if (data === "ui:list") { await sendList(env, chatId); return tgAnswer(env, cb.id); }
   if (data === "ui:settings") { await tgSend(env, chatId, "Время: <code>/sethour 10</code>\nПояс: <code>/settz Europe/Moscow</code>"); return tgAnswer(env, cb.id); }
 
   if (data === "ui:dashboard") {
-    const link = await magicLink(env, chatId, 15 * 60);
-    if (link) await tgSend(env, chatId, `Вход в веб-панель: ${link}\n(Ссылка действует 15 минут)`);
+    const link = await magicLink(env, chatId, 45 * 60);
+    if (link) await tgSend(env, chatId, `Вход в веб-панель: ${link}\n(Ссылка действует 45 минут)`);
     else await tgSend(env, chatId, `У администратора не задан WORKER_URL — кнопка входа недоступна.`);
     return tgAnswer(env, cb.id);
   }
