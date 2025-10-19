@@ -158,8 +158,6 @@ async function onMessage(msg, env) {
     const hour = clampInt(parseInt(m[1], 10), 0, 23);
     await upsertUser(env, { tg_user_id: chatId, notify_hour: hour });
     await tgSend(env, chatId, `Ок, буду писать в ${pad2(hour)}:00.`);
-root@7a52315ad5c2:/workspace/towel-tracker# sed -n '160,320p' src/worker.mjs
-    await tgSend(env, chatId, `Ок, буду писать в ${pad2(hour)}:00.`);
     return;
   }
 
@@ -321,8 +319,6 @@ function statusEmoji(status) {
 function hourInTz(date, tz) {
   try {
     return Number(
-root@7a52315ad5c2:/workspace/towel-tracker# sed -n '320,480p' src/worker.mjs
-    return Number(
       new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", hour12: false, timeZone: tz }).format(
         date
       )
@@ -483,8 +479,6 @@ async function getAccessToken(env) {
   const key = await importPKCS8(pk, "RSASSA-PKCS1-v1_5");
   const signature = await crypto.subtle.sign(
     { name: "RSASSA-PKCS1-v1_5" },
-root@7a52315ad5c2:/workspace/towel-tracker# sed -n '480,640p' src/worker.mjs
-    { name: "RSASSA-PKCS1-v1_5" },
     key,
     new TextEncoder().encode(signingInput)
   );
@@ -644,8 +638,6 @@ function ulid() {
   // Простой ULID-подобный id (достаточен для нашей задачи)
   const now = Date.now().toString(36);
   const rand = crypto.getRandomValues(new Uint8Array(16));
-  return (
-root@7a52315ad5c2:/workspace/towel-tracker# sed -n '640,800p' src/worker.mjs
   return (
     now +
     Array.from(rand)
