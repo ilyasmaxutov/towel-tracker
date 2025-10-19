@@ -1,4 +1,3 @@
-root@7a52315ad5c2:/workspace/towel-tracker# sed -n '1,160p' src/worker.mjs
 /**
  * Towel Freshness Tracker — Cloudflare Worker
  * Слоты полотенец без QR: отслеживаем дату последней замены и напоминаем.
