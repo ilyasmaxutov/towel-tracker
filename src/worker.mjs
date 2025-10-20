@@ -88,10 +88,28 @@ export default {
         return json(slot);
       }
 
+      if (url.pathname.startsWith("/api/slots/") && req.method === "DELETE") {
+        if (!uid) return new Response("unauthorized", { status: 401 });
+        const id = url.pathname.split("/")[3];
+        try {
+          await deleteSlot(env, id, { actor: String(uid) });
+        } catch (e) {
+          if (e && e.message === 'forbidden') return new Response("forbidden", { status: 403 });
+          throw e;
+        }
+        return json({ ok: true });
+      }
+
       if (url.pathname.startsWith("/api/slots/") && url.pathname.endsWith("/refresh") && req.method === "POST") {
         if (!uid) return new Response("unauthorized", { status: 401 });
         const id = url.pathname.split("/")[3];
-        const res = await refreshSlot(env, id, { actor: String(uid) });
+        let res;
+        try {
+          res = await refreshSlot(env, id, { actor: String(uid) });
+        } catch (e) {
+          if (e && e.message === 'forbidden') return new Response("forbidden", { status: 403 });
+          throw e;
+        }
         return json(res);
       }
 
@@ -137,7 +155,7 @@ async function onMessage(msg, env) {
   try { await ensureUser(env, chatId); } catch (e) { console.error("ensureUser failed", e); }
 
   if (text.startsWith("/start")) {
-    const link = await magicLink(env, chatId, 15 * 60); // 15 минут на вход
+    const link = await magicLink(env, chatId, 45 * 60); // 15 минут на вход
     const buttons = [
       [ { text: "➕ Добавить слот", callback_data: "ui:add" }, { text: "📋 Список", callback_data: "ui:list" } ],
       [ { text: "⏰ Настроить время", callback_data: "ui:settings" } ],
@@ -145,23 +163,24 @@ async function onMessage(msg, env) {
     ];
     await tgSend(env, chatId,
       "Привет! Я слежу за свежестью слотов полотенец.\n\n"+
-      "— Создай слот: <code>/add Название | Дни</code>\n"+
-      (link ? "— Открой панель по кнопке ниже (маг-ссылка действует 15 минут)." : "— Админ: установите WORKER_URL, чтобы появилась кнопка входа."),
+      "— Создай слот: <code>/add Название | Комната | Дни</code>\n"+
+      (link ? "— Открой панель по кнопке ниже (маг-ссылка действует 45 минут)." : "— Админ: установите WORKER_URL, чтобы появилась кнопка входа."),
       buttons
     );
     return;
   }
 
   if (text.startsWith("/add")) {
-    const m = text.match(/^\/add\s+(.+?)\s*\|\s*(\d{1,3})$/);
+    const m = text.match(/^\/add\s+(.+?)\s*\|\s*(.+?)\s*\|\s*(\d{1,3})$/);
     if (!m) {
-      await tgSend(env, chatId, "Формат:\n<code>/add Для рук | 3</code>");
+      await tgSend(env, chatId, "Формат:\n<code>/add Для рук | Ванная | 3</code>");
       return;
     }
     const name = m[1].trim();
-    const threshold_days = parseInt(m[2], 10);
-    const slot = await createSlot(env, { name, owner_tg_id: chatId, threshold_days });
-    await tgSend(env, chatId, `Слот «${escapeHtml(slot.name)}» создан. Порог: ${slot.threshold_days} дн.`);
+    const room = m[2].trim();
+    const threshold_days = parseInt(m[3], 10);
+    const slot = await createSlot(env, { name, owner_tg_id: chatId, room, threshold_days });
+    await tgSend(env, chatId, `Слот «${escapeHtml(slot.name)}» (${escapeHtml(slot.room||'—')}) создан. Порог: ${slot.threshold_days} дн.`);
     return;
   }
 
@@ -205,15 +224,36 @@ async function onCallback(cb, env) {
 
   if (data.startsWith("refresh:")) {
     const id = data.split(":")[1];
-    await refreshSlot(env, id, { actor: String(chatId) });
-    await tgAnswer(env, cb.id, "Обновлено");
-    return sendList(env, chatId);
+    try {
+      await refreshSlot(env, id, { actor: String(chatId) });
+      await tgAnswer(env, cb.id, "Обновлено");
+      return sendList(env, chatId);
+    } catch (e) {
+      console.error("refreshSlot failed", e);
+      return tgAnswer(env, cb.id, "Нет доступа", true);
+    }
+  }
+  if (data.startsWith("del:")) {
+    const id = data.split(":")[1];
+    try {
+      await deleteSlot(env, id, { actor: String(chatId) });
+      await tgAnswer(env, cb.id, "Удалено");
+      return sendList(env, chatId);
+    } catch (e) {
+      console.error("deleteSlot failed", e);
+      return tgAnswer(env, cb.id, "Не удалось удалить", true);
+    }
   }
   if (data.startsWith("setth:")) {
     const [_, id, days] = data.split(":");
-    await updateSlot(env, id, { threshold_days: parseInt(days, 10) });
-    await tgAnswer(env, cb.id, `Порог: ${days} дн`);
-    return sendList(env, chatId);
+    try {
+      await updateSlot(env, id, { threshold_days: parseInt(days, 10) }, { actor: String(chatId) });
+      await tgAnswer(env, cb.id, `Порог: ${days} дн`);
+      return sendList(env, chatId);
+    } catch (e) {
+      console.error("updateSlot failed", e);
+      return tgAnswer(env, cb.id, "Нет доступа", true);
+    }
   }
 }
 
@@ -228,16 +268,23 @@ async function sendList(env, chatId) {
 
   const lines = slots.sort((a,b)=>a.score-b.score).map(s=>{
     const age = daysSince(s.last_change_at);
-    return `${statusEmoji(s.status)} ${escapeHtml(s.name)} — ${age} дн / порог ${s.threshold_days} • ${Math.round(s.score)}%`;
+    const room = s.room ? ` • ${escapeHtml(s.room)}` : "";
+    return `${statusEmoji(s.status)} ${escapeHtml(s.name)}${room} — ${age} дн / порог ${s.threshold_days}`;
   }).join("\n");
 
-  const buttons = slots.slice(0,6).map(s=>[
-    { text: `🔄 ${shorten(s.name,18)}`, callback_data: `refresh:${s.id}` },
-    { text: "1д", callback_data: `setth:${s.id}:1` },
-    { text: "2д", callback_data: `setth:${s.id}:2` },
-    { text: "3д", callback_data: `setth:${s.id}:3` },
-    { text: "5д", callback_data: `setth:${s.id}:5` },
-  ]);
+  const buttons = [];
+  for (const s of slots.slice(0,6)) {
+    buttons.push([
+      { text: `🔄 ${shorten(s.name,14)}`, callback_data: `refresh:${s.id}` },
+      { text: "🗑", callback_data: `del:${s.id}` },
+    ]);
+    buttons.push([
+      { text: "1д", callback_data: `setth:${s.id}:1` },
+      { text: "2д", callback_data: `setth:${s.id}:2` },
+      { text: "3д", callback_data: `setth:${s.id}:3` },
+      { text: "5д", callback_data: `setth:${s.id}:5` },
+    ]);
+  }
 
   await tgSend(env, chatId, lines, buttons);
 }
@@ -256,10 +303,17 @@ async function runHourlyReminders(env) {
     if (localHour !== targetHour) continue;
 
     const slots = await listSlots(env, u.tg_user_id);
-    const overdue = slots.filter(s => s.status !== "OK");
+    const overdue = slots.filter(s => daysSince(s.last_change_at) >= Number(s.threshold_days || 0));
     if (!overdue.length) continue;
 
-    const body = overdue.sort((a,b)=>a.score-b.score).map(s=>`${statusEmoji(s.status)} ${escapeHtml(s.name)} — ${daysSince(s.last_change_at)} дн (порог ${s.threshold_days})`).join("\n");
+    const body = overdue
+      .sort((a,b)=>a.score-b.score)
+      .map(s=>{
+        const age = daysSince(s.last_change_at);
+        const room = s.room ? ` (${escapeHtml(s.room)})` : "";
+        return `${statusEmoji(s.status)} ${escapeHtml(s.name)}${room} — ${age} дн (порог ${s.threshold_days})`;
+      })
+      .join("\n");
     const buttons = overdue.slice(0,6).map(s=>[{ text: `🔄 ${shorten(s.name,18)}`, callback_data: `refresh:${s.id}` }]);
 
     await tgSend(env, u.tg_user_id, `Напоминание:\n${body}`, buttons);
@@ -378,56 +432,130 @@ function shorten(s,n){ return s.length>n ? s.slice(0,n-1)+'…' : s; }
 /* =========================
  * Google Sheets API (JWT) + слой доступа
  * ========================= */
-async function listSlots(env, ownerFilter /* tg_user_id */) {
-  const rows = await sheetsGet(env, 'slots!A2:F');
-  const slots = (rows||[]).map(r=>({
-    id: r[0],
-    name: r[1],
-    owner_tg_id: r[2] ? Number(r[2]) : null,
-    room: r[3] || '',
-    threshold_days: r[4] ? Number(r[4]) : 3,
-    last_change_at: r[5] || new Date().toISOString(),
-  }));
-  const filtered = ownerFilter ? slots.filter(s=>s.owner_tg_id===Number(ownerFilter)) : slots;
-  return filtered.map(s=>({ ...s, ...calcStatus(s.threshold_days, s.last_change_at) }));
+const SLOT_RANGE = 'slots!A2:F';
+const SLOT_APPEND_RANGE = 'slots!A:F';
+const ACCESS_RANGE = 'access!A2:B';
+const ACCESS_APPEND_RANGE = 'access!A:B';
+const SLOT_ROOM_COLUMN = 'D';
+const SLOT_THRESHOLD_COLUMN = 'E';
+const SLOT_LAST_COLUMN = 'F';
+const sheetIdCache = new Map();
+
+async function listSlots(env, userFilter /* tg_user_id */, opts = {}) {
+  const table = await getSlotsTable(env);
+  let filtered = table;
+  if (userFilter != null) {
+    const groups = await listGroupsForUser(env, userFilter, { ensure: false });
+    const groupSet = new Set(groups);
+    if (groupSet.size === 0) groupSet.add(`tg:${userFilter}`);
+    filtered = table.filter(slot => hasSlotAccess(slot, userFilter, groupSet));
+  }
+  const includeMeta = Boolean(opts.includeMeta);
+  return filtered.map(slot => formatSlotForOutput(slot, includeMeta));
+}
+
+function hasSlotAccess(slot, userId, groupSet) {
+  if (userId == null) return true;
+  if (slot.group_id && groupSet.has(slot.group_id)) return true;
+  if (slot.owner_fallback != null && Number(slot.owner_fallback) === Number(userId)) return true;
+  return false;
+}
+
+function formatSlotForOutput(slot, includeMeta) {
+  const metrics = calcStatus(slot.threshold_days, slot.last_change_at);
+  const base = {
+    id: slot.id,
+    name: slot.name,
+    group_id: slot.group_id,
+    room: slot.room,
+    threshold_days: slot.threshold_days,
+    last_change_at: slot.last_change_at,
+    ...metrics,
+  };
+  if (includeMeta) base.sheet_row = slot.sheet_row;
+  return base;
 }
 
 async function createSlot(env, { name, owner_tg_id, room = '', threshold_days = 3 }) {
+  const normalizedThreshold = Math.max(1, Number(threshold_days) || 1);
   const id = ulid();
   const now = new Date().toISOString();
-  await sheetsAppend(env, 'slots!A:F', [[id, name, String(owner_tg_id||''), room, String(threshold_days), now]]);
+  const group_id = owner_tg_id != null ? await getPrimaryGroupId(env, owner_tg_id) : '';
+  const normalizedRoom = (room || '').trim();
+  await sheetsAppend(env, SLOT_APPEND_RANGE, [[id, name, group_id, normalizedRoom, String(normalizedThreshold), now]]);
   await logEvent(env, { slot_id: id, action: 'CREATE', actor: String(owner_tg_id||''), note: name });
-  return { id, name, owner_tg_id, room, threshold_days, last_change_at: now, score: 100, status: 'OK' };
+  const metrics = calcStatus(normalizedThreshold, now);
+  return { id, name, group_id, room: normalizedRoom, threshold_days: normalizedThreshold, last_change_at: now, ...metrics };
 }
 
 async function refreshSlot(env, id, { actor = '' } = {}) {
+  const slot = await getSlotById(env, id);
+  if (!slot) throw new Error('slot not found');
+  if (actor != null && actor !== '') {
+    const groups = await listGroupsForUser(env, actor, { ensure: false });
+    const groupSet = new Set(groups);
+    if (groupSet.size === 0) groupSet.add(`tg:${actor}`);
+    if (!hasSlotAccess(slot, actor, groupSet)) throw new Error('forbidden');
+  }
+
   const now = new Date().toISOString();
-  const { rowIndex } = await findRowById(env, 'slots', id);
-  if (!rowIndex) throw new Error('slot not found');
-  await sheetsUpdate(env, [ { range: `slots!F${rowIndex}:F${rowIndex}`, values: [[now]] } ]);
-  await logEvent(env, { slot_id: id, action: 'REFRESH', actor: String(actor), note: '' });
+  await sheetsUpdate(env, [ { range: `slots!${SLOT_LAST_COLUMN}${slot.sheet_row}:${SLOT_LAST_COLUMN}${slot.sheet_row}`, values: [[now]] } ]);
+  await logEvent(env, { slot_id: id, action: 'REFRESH', actor: String(actor||''), note: '' });
   return { ok: true };
 }
 
-async function refreshByRoom(env, ownerId, room) {
-  const all = await listSlots(env, ownerId);
+async function refreshByRoom(env, actorId, room) {
+  const all = await listSlots(env, actorId, { includeMeta: true });
   const targets = all.filter(s => (s.room||'') === room);
   if (!targets.length) return { updated: 0 };
   const now = new Date().toISOString();
-  const updates = [];
-  for (const t of targets) {
-    const { rowIndex } = await findRowById(env, 'slots', t.id);
-    if (rowIndex) updates.push({ range: `slots!F${rowIndex}:F${rowIndex}`, values: [[now]] });
-  }
+  const updates = targets.map(t => ({ range: `slots!${SLOT_LAST_COLUMN}${t.sheet_row}:${SLOT_LAST_COLUMN}${t.sheet_row}`, values: [[now]] }));
   if (updates.length) await sheetsUpdate(env, updates);
-  for (const t of targets) await logEvent(env, { slot_id: t.id, action: 'REFRESH', actor: String(ownerId), note: `room:${room}` });
+  for (const t of targets) await logEvent(env, { slot_id: t.id, action: 'REFRESH', actor: String(actorId), note: `room:${room}` });
   return { updated: targets.length };
+}
+
+async function updateSlot(env, id, patch = {}, { actor = '' } = {}) {
+  const slot = await getSlotById(env, id);
+  if (!slot) throw new Error('slot not found');
+  if (actor != null && actor !== '') {
+    const groups = await listGroupsForUser(env, actor, { ensure: false });
+    const groupSet = new Set(groups);
+    if (groupSet.size === 0) groupSet.add(`tg:${actor}`);
+    if (!hasSlotAccess(slot, actor, groupSet)) throw new Error('forbidden');
+  }
+  const updates = [];
+  if (patch.room != null) updates.push({ range: `slots!${SLOT_ROOM_COLUMN}${slot.sheet_row}:${SLOT_ROOM_COLUMN}${slot.sheet_row}`, values: [[String(patch.room || '')]] });
+  if (patch.threshold_days != null) {
+    const val = Math.max(1, Number(patch.threshold_days) || 1);
+    updates.push({ range: `slots!${SLOT_THRESHOLD_COLUMN}${slot.sheet_row}:${SLOT_THRESHOLD_COLUMN}${slot.sheet_row}`, values: [[String(val)]] });
+  }
+  if (updates.length) {
+    await sheetsUpdate(env, updates);
+    await logEvent(env, { slot_id: id, action: 'UPDATE', actor: String(actor||''), note: JSON.stringify(patch) });
+  }
+  return { ok: true };
+}
+
+async function deleteSlot(env, id, { actor = '' } = {}) {
+  const slot = await getSlotById(env, id);
+  if (!slot) throw new Error('slot not found');
+  if (actor != null && actor !== '') {
+    const groups = await listGroupsForUser(env, actor, { ensure: false });
+    const groupSet = new Set(groups);
+    if (groupSet.size === 0) groupSet.add(`tg:${actor}`);
+    if (!hasSlotAccess(slot, actor, groupSet)) throw new Error('forbidden');
+  }
+  await sheetsDeleteRow(env, 'slots', slot.sheet_row);
+  await logEvent(env, { slot_id: id, action: 'DELETE', actor: String(actor||''), note: slot.name || '' });
+  return { ok: true };
 }
 
 async function ensureUser(env, tg_user_id) {
   const rows = await sheetsGet(env, 'users!A2:C');
   const exists = (rows||[]).some(r => r[0] === String(tg_user_id));
   if (!exists) await sheetsAppend(env, 'users!A:C', [[String(tg_user_id), env.DEFAULT_TZ || 'Europe/Moscow', String(env.DEFAULT_NOTIFY_HOUR || 10)]]);
+  await listGroupsForUser(env, tg_user_id, { ensure: true });
 }
 
 async function upsertUser(env, { tg_user_id, tz, notify_hour }) {
@@ -440,6 +568,7 @@ async function upsertUser(env, { tg_user_id, tz, notify_hour }) {
     if (notify_hour != null) updates.push({ range: `users!C${rowIndex}:C${rowIndex}`, values: [[String(notify_hour)]] });
     if (updates.length) await sheetsUpdate(env, updates);
   }
+  await listGroupsForUser(env, tg_user_id, { ensure: true });
 }
 
 async function listUsers(env) {
@@ -450,6 +579,85 @@ async function listUsers(env) {
 async function logEvent(env, { slot_id, action, actor, note }) {
   const ts = new Date().toISOString();
   await sheetsAppend(env, 'events!A:E', [[ts, slot_id, action, actor, note || '']]);
+}
+
+async function getPrimaryGroupId(env, tg_user_id) {
+  const groups = await listGroupsForUser(env, tg_user_id, { ensure: true });
+  return groups[0] || `tg:${tg_user_id}`;
+}
+
+async function listGroupsForUser(env, tg_user_id, { ensure = false } = {}) {
+  if (tg_user_id == null) return [];
+  const desired = String(tg_user_id);
+  const rows = await sheetsGet(env, ACCESS_RANGE);
+  const matches = (rows || []).filter(r => (r[1] || '') === desired).map(r => r[0]).filter(Boolean);
+  if (matches.length || !ensure) return matches;
+  const group_id = `tg:${desired}`;
+  await sheetsAppend(env, ACCESS_APPEND_RANGE, [[group_id, desired]]);
+  return [group_id];
+}
+
+async function getSlotsTable(env) {
+  const rows = await sheetsGet(env, SLOT_RANGE);
+  const table = [];
+  const fixes = [];
+  for (let i = 0; i < (rows || []).length; i++) {
+    const rowNumber = i + 2;
+    const row = rows[i] ? [...rows[i]] : [];
+    const currentId = row[0] ? String(row[0]).trim() : '';
+    if (!currentId && row[1] && String(row[1]).trim()) {
+      const newId = ulid();
+      row[0] = newId;
+      fixes.push({ range: `slots!A${rowNumber}:A${rowNumber}`, values: [[newId]] });
+    }
+    const slot = parseSlotRow(row, rowNumber);
+    if (slot) table.push(slot);
+  }
+  if (fixes.length) await sheetsUpdate(env, fixes);
+  return table;
+}
+
+async function getSlotById(env, id) {
+  const table = await getSlotsTable(env);
+  return table.find(s => s.id === id) || null;
+}
+
+function parseSlotRow(row, rowNumber) {
+  const id = (row && row[0] ? String(row[0]).trim() : '');
+  if (!id) return null;
+  const name = row[1] ? String(row[1]).trim() : '';
+  let group_id = row[2] ? String(row[2]).trim() : '';
+  let owner_fallback = null;
+  if (group_id && /^\d+$/.test(group_id)) {
+    owner_fallback = Number(group_id);
+    group_id = `tg:${group_id}`;
+  }
+  const room = row[3] ? String(row[3]).trim() : '';
+  const threshold_days = row[4] != null && row[4] !== '' ? Number(row[4]) : 3;
+  const last_change_at = row[5] ? String(row[5]) : new Date().toISOString();
+  return { id, name, group_id, room, threshold_days, last_change_at, sheet_row: rowNumber, owner_fallback };
+}
+
+async function sheetsDeleteRow(env, sheetTitle, rowIndex) {
+  const token = await getAccessToken(env);
+  const sheetId = await getSheetId(env, sheetTitle, token);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}:batchUpdate`;
+  const body = { requests: [ { deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rowIndex - 1, endIndex: rowIndex } } } ] };
+  const resp = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!resp.ok) throw new Error('sheets delete row error: ' + resp.status);
+}
+
+async function getSheetId(env, title, token) {
+  if (sheetIdCache.has(title)) return sheetIdCache.get(title);
+  const auth = token || await getAccessToken(env);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}?fields=sheets.properties`;
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${auth}` } });
+  if (!resp.ok) throw new Error('sheets metadata error: ' + resp.status);
+  const data = await resp.json();
+  const sheet = (data.sheets || []).map(s => s.properties).find(p => p.title === title);
+  if (!sheet) throw new Error('sheet not found: ' + title);
+  sheetIdCache.set(title, sheet.sheetId);
+  return sheet.sheetId;
 }
 
 async function findRowById(env, sheetName, id) {
@@ -613,6 +821,10 @@ async function runDiag(env){
   let sheetsOk=false, note='';
   try { const vals=await sheetsGet(env,'slots!A1:F1'); sheetsOk=Array.isArray(vals); note=JSON.stringify(vals||[]); } catch(e){ sheetsOk=false; note=(e&&e.message)||String(e); }
   lines.push(ok('Sheets — slots!A1:F1', sheetsOk, note));
+  let accessOk=false, accessNote='';
+  try { const vals=await sheetsGet(env,'access!A1:B1'); accessOk=Array.isArray(vals); accessNote=JSON.stringify(vals||[]); }
+  catch(e){ accessOk=false; accessNote=(e&&e.message)||String(e); }
+  lines.push(ok('Sheets — access!A1:B1', accessOk, accessNote));
   return `<!doctype html><meta charset="utf-8"><title>Диагностика</title><style>body{font-family:system-ui;padding:20px;background:#0b0b0b;color:#fafafa}table{border-collapse:collapse}td,th{border:1px solid #333;padding:6px 8px}</style><h1>Диагностика</h1><table><thead><tr><th>Проверка</th><th>OK?</th><th>Детали</th></tr></thead><tbody>${lines.join('')}</tbody></table>`;
 }
 
