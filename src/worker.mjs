@@ -684,29 +684,57 @@ async function findRowById(env, sheetName, id) {
 async function getAccessToken(env) {
   const iss = env.GOOGLE_CLIENT_EMAIL; if (!iss) throw new Error('GOOGLE_CLIENT_EMAIL не задан');
   if (!env.GOOGLE_PRIVATE_KEY) throw new Error('GOOGLE_PRIVATE_KEY не задан');
-  // Нормализация ключа: поддержка \n, реальных переводов строки и «голого» base64
+
+  // Нормализуем ключ: поддержка \n, реальных переводов, «голого» base64 (без BEGIN/END)
   let pkRaw = String(env.GOOGLE_PRIVATE_KEY);
   if (pkRaw.includes('\\n')) pkRaw = pkRaw.replace(/\\n/g, '\n').trim();
+
   let pk;
   if (pkRaw.includes('BEGIN PRIVATE KEY')) {
     pk = pkRaw.trim();
   } else {
     const body = pkRaw.replace(/-----(BEGIN|END)[\s\S]*?-----/g,'').replace(/\s+/g,'');
-    if (!/^[a-zA-Z0-9+/=_-]+$/.test(body) || body.length < 100) throw new Error('GOOGLE_PRIVATE_KEY не похож на PKCS8');
-    pk = `-----BEGIN PRIVATE KEY-----\n${chunk64(body)}\n-----END PRIVATE KEY-----`;
+    if (!/^[a-zA-Z0-9+/=_-]+$/.test(body) || body.length < 100) {
+      throw new Error('GOOGLE_PRIVATE_KEY не похож на PKCS8. Вставь значение поля private_key из JSON.');
+    }
+    pk = `-----BEGIN PRIVATE KEY-----\n${(body.match(/.{1,64}/g)||[body]).join('\n')}\n-----END PRIVATE KEY-----`;
   }
 
   const now = Math.floor(Date.now()/1000);
   const header = { alg: 'RS256', typ: 'JWT' };
   const claim  = { iss, scope: 'https://www.googleapis.com/auth/spreadsheets', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now };
 
-  const encHeader = b64url(new TextEncoder().encode(JSON.stringify(header)));
-  const encClaim  = b64url(new TextEncoder().encode(JSON.stringify(claim)));
+  const encHeader = b64url(JSON.stringify(header));
+  const encClaim  = b64url(JSON.stringify(claim));
   const signingInput = `${encHeader}.${encClaim}`;
 
   const key = await importPKCS8(pk, 'RSASSA-PKCS1-v1_5');
   const signature = await crypto.subtle.sign({ name: 'RSASSA-PKCS1-v1_5' }, key, new TextEncoder().encode(signingInput));
   const jwt = `${signingInput}.${b64url(signature)}`;
+
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt })
+  });
+  if (!resp.ok) { const txt = await resp.text().catch(()=>String(resp.status)); throw new Error('oauth token error: '+resp.status+' '+txt); }
+  const data = await resp.json();
+  return data.access_token;
+}
+
+async function importPKCS8(pem, algName) {
+  let body = pem;
+  if (pem.includes('BEGIN')) body = pem.replace(/-----BEGIN [\s\S]*?-----/g,'').replace(/-----END [\s\S]*?-----/g,'').replace(/\r?\n|\r/g,'').trim();
+  if (!/^[a-zA-Z0-9+/=_-]+$/.test(body) || body.length < 100) throw new Error('Invalid PKCS8 body');
+  const raw = Uint8Array.from(atob(body), c => c.charCodeAt(0));
+  return crypto.subtle.importKey('pkcs8', raw, { name: algName, hash: 'SHA-256' }, false, ['sign']);
+}
+
+// вспомогательный base64url от строки/ArrayBuffer
+function b64url(input) {
+  const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : new TextEncoder().encode(String(input));
+  let bin = ''; for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
+}
 
   const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
