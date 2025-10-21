@@ -41,19 +41,27 @@ export default {
 
   let update = null;
   try { update = await req.json(); } catch {}
+   // Обработку делаем асинхронно, а HTTP-ответ — сразу 200
+  ctx.waitUntil(safeHandle(update, env));
+  return json({ ok: true }); // <-- Telegram всегда видит 200 OK
+}
+async function safeHandle(update, env) {
   try {
     await handleTelegramUpdate(update, env);
   } catch (e) {
     console.error('[tg webhook] handler error:', e);
-    // Пытаемся сообщить пользователю, но не роняем вебхук
+    // Пытаемся культурно уведомить пользователя, но без паники
     try {
-      const chatId = update?.message?.chat?.id || update?.callback_query?.message?.chat?.id;
-      if (chatId) {
-        await tgSend(env, chatId, 'Техническая заминка с таблицей. Попробуй ещё раз чуть позже 🙏');
-      }
-    } catch (e2) { console.error('notify user failed', e2); }
+      const chatId = extractChatId(update);
+      if (chatId) await tgSend(env, chatId, 'Техническая заминка. Уже чищу перья и вернусь 🙏');
+    } catch (e2) {
+      console.error('notify failed', e2);
+    }
   }
-  return json({ ok: true }); // <-- ВСЕГДА 200 ОК ДЛЯ TELEGRAM
+}
+
+function extractChatId(update) {
+  return update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null;
 }
 
       // Ручной вызов крон-логики
