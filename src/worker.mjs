@@ -35,13 +35,26 @@ export default {
 
     try {
       // Telegram webhook
-      if (url.pathname === "/tg/webhook" && req.method === "POST") {
-        const sec = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
-        if (!sec || sec !== env.TELEGRAM_WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
-        const update = await req.json();
-        await handleTelegramUpdate(update, env);
-        return json({ ok: true });
+      if (path === '/tg/webhook' && req.method === 'POST') {
+  const sec = req.headers.get('X-Telegram-Bot-Api-Secret-Token');
+  if (!sec || sec !== env.TELEGRAM_WEBHOOK_SECRET) return new Response('forbidden', { status: 403 });
+
+  let update = null;
+  try { update = await req.json(); } catch {}
+  try {
+    await handleTelegramUpdate(update, env);
+  } catch (e) {
+    console.error('[tg webhook] handler error:', e);
+    // Пытаемся сообщить пользователю, но не роняем вебхук
+    try {
+      const chatId = update?.message?.chat?.id || update?.callback_query?.message?.chat?.id;
+      if (chatId) {
+        await tgSend(env, chatId, 'Техническая заминка с таблицей. Попробуй ещё раз чуть позже 🙏');
       }
+    } catch (e2) { console.error('notify user failed', e2); }
+  }
+  return json({ ok: true }); // <-- ВСЕГДА 200 ОК ДЛЯ TELEGRAM
+}
 
       // Ручной вызов крон-логики
       if (url.pathname === "/__cron") {
@@ -209,7 +222,7 @@ async function onCallback(cb, env) {
   const data = cb.data || "";
 
   if (data === "ui:add") {
-    await tgSend(env, chatId, "Создай слот командой:\n<code>/add Название | Дни</code>\nНапример: <code>/add Для рук | 3</code>");
+    await tgSend(env, chatId, "Создай слот командой:\n<code>/add Название | Комната | Дни</code>\nНапример: <code>/add Для рук | Ванная | 3</code>");
     return tgAnswer(env, cb.id, "Жду /add");
   }
   if (data === "ui:list") { await sendList(env, chatId); return tgAnswer(env, cb.id); }
@@ -264,7 +277,7 @@ async function sendList(env, chatId) {
     console.error("listSlots failed", e);
     return tgSend(env, chatId, "Не удалось прочитать таблицу. Дай сервисному аккаунту доступ Редактора к Google Sheets.");
   }
-  if (!slots.length) return tgSend(env, chatId, "Слотов пока нет. Создай: <code>/add Название | Дни</code>");
+  if (!slots.length) return tgSend(env, chatId, "Слотов пока нет. Создай: <code>/add Название | Комната | Дни</code>");
 
   const lines = slots.sort((a,b)=>a.score-b.score).map(s=>{
     const age = daysSince(s.last_change_at);
@@ -497,7 +510,6 @@ async function refreshSlot(env, id, { actor = '' } = {}) {
     if (groupSet.size === 0) groupSet.add(`tg:${actor}`);
     if (!hasSlotAccess(slot, actor, groupSet)) throw new Error('forbidden');
   }
-
   const now = new Date().toISOString();
   await sheetsUpdate(env, [ { range: `slots!${SLOT_LAST_COLUMN}${slot.sheet_row}:${SLOT_LAST_COLUMN}${slot.sheet_row}`, values: [[now]] } ]);
   await logEvent(env, { slot_id: id, action: 'REFRESH', actor: String(actor||''), note: '' });
@@ -821,6 +833,10 @@ async function runDiag(env){
   let sheetsOk=false, note='';
   try { const vals=await sheetsGet(env,'slots!A1:F1'); sheetsOk=Array.isArray(vals); note=JSON.stringify(vals||[]); } catch(e){ sheetsOk=false; note=(e&&e.message)||String(e); }
   lines.push(ok('Sheets — slots!A1:F1', sheetsOk, note));
+  let accessOk=false, accessNote='';
+  try { const vals=await sheetsGet(env,'access!A1:B1'); accessOk=Array.isArray(vals); accessNote=JSON.stringify(vals||[]); }
+  catch(e){ accessOk=false; accessNote=(e&&e.message)||String(e); }
+  lines.push(ok('Sheets — access!A1:B1', accessOk, accessNote));
   let accessOk=false, accessNote='';
   try { const vals=await sheetsGet(env,'access!A1:B1'); accessOk=Array.isArray(vals); accessNote=JSON.stringify(vals||[]); }
   catch(e){ accessOk=false; accessNote=(e&&e.message)||String(e); }
