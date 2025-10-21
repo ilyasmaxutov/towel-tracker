@@ -12,7 +12,7 @@ compatibility_date = "2025-10-18"
 
 [triggers]
 # Ежечасный крон — бот сам решит, кому сейчас пора напоминать
-crons = ["0 * * * *"]
+crons = ["0-59 * * * *"]
 
 
 [observability]
@@ -28,3 +28,4 @@ enabled = true
 # DEFAULT_TZ (напр. Europe/Moscow)
 
 # DEFAULT_NOTIFY_HOUR (напр. 10)
+
