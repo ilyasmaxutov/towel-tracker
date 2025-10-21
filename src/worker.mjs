@@ -837,10 +837,6 @@ async function runDiag(env){
   try { const vals=await sheetsGet(env,'access!A1:B1'); accessOk=Array.isArray(vals); accessNote=JSON.stringify(vals||[]); }
   catch(e){ accessOk=false; accessNote=(e&&e.message)||String(e); }
   lines.push(ok('Sheets — access!A1:B1', accessOk, accessNote));
-  let accessOk=false, accessNote='';
-  try { const vals=await sheetsGet(env,'access!A1:B1'); accessOk=Array.isArray(vals); accessNote=JSON.stringify(vals||[]); }
-  catch(e){ accessOk=false; accessNote=(e&&e.message)||String(e); }
-  lines.push(ok('Sheets — access!A1:B1', accessOk, accessNote));
   return `<!doctype html><meta charset="utf-8"><title>Диагностика</title><style>body{font-family:system-ui;padding:20px;background:#0b0b0b;color:#fafafa}table{border-collapse:collapse}td,th{border:1px solid #333;padding:6px 8px}</style><h1>Диагностика</h1><table><thead><tr><th>Проверка</th><th>OK?</th><th>Детали</th></tr></thead><tbody>${lines.join('')}</tbody></table>`;
 }
 
