@@ -751,7 +751,6 @@ function b64url(input) {
   if (!resp.ok) { const txt = await resp.text().catch(()=>String(resp.status)); throw new Error('oauth token error: '+resp.status+' '+txt); }
   const data = await resp.json();
   return data.access_token;
-}
 
 async function sheetsGet(env, rangeA1) {
   if (!env.SPREADSHEET_ID) throw new Error('SPREADSHEET_ID не задан');
