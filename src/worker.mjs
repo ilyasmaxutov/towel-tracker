@@ -35,34 +35,34 @@ export default {
 
     try {
       // Telegram webhook
-      if (path === '/tg/webhook' && req.method === 'POST') {
-  const sec = req.headers.get('X-Telegram-Bot-Api-Secret-Token');
-  if (!sec || sec !== env.TELEGRAM_WEBHOOK_SECRET) return new Response('forbidden', { status: 403 });
+      if (url.pathname === '/tg/webhook' && req.method === 'POST') {
+        const sec = req.headers.get('X-Telegram-Bot-Api-Secret-Token');
+        if (!sec || sec !== env.TELEGRAM_WEBHOOK_SECRET) return new Response('forbidden', { status: 403 });
 
-  let update = null;
-  try { update = await req.json(); } catch {}
-   // Обработку делаем асинхронно, а HTTP-ответ — сразу 200
-  ctx.waitUntil(safeHandle(update, env));
-  return json({ ok: true }); // <-- Telegram всегда видит 200 OK
-}
-async function safeHandle(update, env) {
-  try {
-    await handleTelegramUpdate(update, env);
-  } catch (e) {
-    console.error('[tg webhook] handler error:', e);
-    // Пытаемся культурно уведомить пользователя, но без паники
-    try {
-      const chatId = extractChatId(update);
-      if (chatId) await tgSend(env, chatId, 'Техническая заминка. Уже чищу перья и вернусь 🙏');
-    } catch (e2) {
-      console.error('notify failed', e2);
-    }
-  }
-}
+        let update = null;
+        try { update = await req.json(); } catch {}
+         // Обработку делаем асинхронно, а HTTP-ответ — сразу 200
+        ctx.waitUntil(safeHandle(update, env));
+        return json({ ok: true }); // <-- Telegram всегда видит 200 OK
+      }
+      async function safeHandle(update, env) {
+        try {
+          await handleTelegramUpdate(update, env);
+        } catch (e) {
+          console.error('[tg webhook] handler error:', e);
+          // Пытаемся культурно уведомить пользователя, но без паники
+          try {
+            const chatId = extractChatId(update);
+            if (chatId) await tgSend(env, chatId, 'Техническая заминка. Уже чищу перья и вернусь 🙏');
+          } catch (e2) {
+            console.error('notify failed', e2);
+          }
+        }
+      }
 
-function extractChatId(update) {
-  return update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null;
-}
+      function extractChatId(update) {
+        return update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null;
+      }
 
       // Ручной вызов крон-логики
       if (url.pathname === "/__cron") {
@@ -744,14 +744,6 @@ function b64url(input) {
   return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
 }
 
-  //const resp = await fetch('https://oauth2.googleapis.com/token', {
-    //method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    //body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt })
-  //});
-  //if (!resp.ok) { const txt = await resp.text().catch(()=>String(resp.status)); throw new Error('oauth token error: '+resp.status+' '+txt); }
-  //const data = await resp.json();
-  //return data.access_token;
-//}
 async function sheetsGet(env, rangeA1) {
   if (!env.SPREADSHEET_ID) throw new Error('SPREADSHEET_ID не задан');
   const token = await getAccessToken(env);
@@ -830,19 +822,10 @@ function json(obj){return new Response(JSON.stringify(obj),{headers:{'content-ty
 /* =========================
  * Крипто/утилиты
  * ========================= */
-function b64url(bufOrBytes){ const bytes = bufOrBytes instanceof ArrayBuffer ? new Uint8Array(bufOrBytes) : new Uint8Array(bufOrBytes); let binary=''; for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]); let base64=btoa(binary); return base64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); }
 function b64ToBytes(b64){ b64=b64.replace(/-/g,'+').replace(/_/g,'/'); const pad = b64.length%4===2?'==':b64.length%4===3?'=':''; const s=b64+pad; const bin=atob(s); const out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
 function chunk64(s){ return s.match(/.{1,64}/g)?.join('\n') || s; }
-
-async function importPKCS8(pem, algName){
-  let body=pem;
-  if (pem.includes('BEGIN')) body=pem.replace(/-----BEGIN [\s\S]*?-----/g,'').replace(/-----END [\s\S]*?-----/g,'').replace(/\r?\n|\r/g,'').trim();
-  if (!/^[a-zA-Z0-9+/=_-]+$/.test(body) || body.length<100) throw new Error('Invalid PKCS8 body');
-  const raw=Uint8Array.from(atob(body),c=>c.charCodeAt(0));
-  return crypto.subtle.importKey('pkcs8', raw, { name: algName, hash: 'SHA-256' }, false, ['sign']);
-}
-
 function ulid(){ const now=Date.now().toString(36); const rand=crypto.getRandomValues(new Uint8Array(16)); return (now+Array.from(rand).map(b=>b.toString(36).padStart(2,'0')).join('')).slice(0,26); }
+
 
 /* =========================
  * Telegram API
